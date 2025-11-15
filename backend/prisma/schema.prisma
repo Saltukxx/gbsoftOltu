@@ -1,0 +1,553 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider        = "postgresql"
+  url             = env("DATABASE_URL")
+  directUrl       = env("DIRECT_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+// Enums
+enum UserRole {
+  PRESIDENT
+  ADMIN
+  SUPERVISOR
+  OPERATOR
+  MESSENGER
+  DEPO_KULLANICISI
+}
+
+enum ShiftSlot {
+  MORNING
+  AFTERNOON
+  NIGHT
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum VehicleType {
+  TRUCK
+  CAR
+  MOTORCYCLE
+  HEAVY_MACHINERY
+  AMBULANCE
+  FIRE_TRUCK
+}
+
+enum FuelType {
+  GASOLINE
+  DIESEL
+  ELECTRIC
+  HYBRID
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum TelemetryEventType {
+  GPS_UPDATE
+  FUEL_LEVEL
+  ENGINE_START
+  ENGINE_STOP
+  MAINTENANCE_ALERT
+  SPEED_VIOLATION
+  GEO_FENCE_VIOLATION
+}
+
+enum MessagePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TelemetrySeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  BLOCKED
+  DONE
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum WarehouseTransactionType {
+  CHECK_IN
+  CHECK_OUT
+  TRANSFER
+  ADJUSTMENT
+}
+
+enum WarehouseItemCategory {
+  EQUIPMENT
+  MATERIALS
+  VEHICLES
+  TOOLS
+  SUPPLIES
+  OTHER
+}
+
+enum WarehouseItemCondition {
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+  DAMAGED
+}
+
+enum OptimizationAlgorithm {
+  NEAREST_NEIGHBOR
+  GENETIC_ALGORITHM
+  ANT_COLONY_OPTIMIZATION
+  HYBRID
+}
+
+enum OptimizationPattern {
+  NONE
+  SPIRAL
+  GRID
+  BACK_AND_FORTH
+  PERIMETER_FIRST
+  TSP_OPTIMAL
+}
+
+// Users and Authentication
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  password     String
+  firstName    String
+  lastName     String
+  role         UserRole
+  isActive     Boolean  @default(true)
+  tokenVersion Int      @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  employee         Employee?
+  sentMessages     Message[]  @relation("SentMessages")
+  receivedMessages Message[]  @relation("ReceivedMessages")
+  auditLogs        AuditLog[]
+  assignedTasks    Task[]     @relation("TaskAssigner")
+  taskAssignments  TaskAssignee[]
+  warehouseTransactions WarehouseTransaction[] @relation("TransactionUser")
+  assignedWarehouseItems WarehouseTransaction[] @relation("AssignedUser")
+
+  @@map("users")
+}
+
+// Employee Management
+model Employee {
+  id               String    @id @default(uuid())
+  userId           String    @unique
+  employeeNumber   String    @unique
+  department       String
+  position         String
+  skills           Json // Array of skills
+  performanceScore Float     @default(0)
+  maxHoursPerWeek  Int       @default(40)
+  availability     Json // Available days and time slots
+  isActive         Boolean   @default(true)
+  deletedAt        DateTime?
+
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  shifts Shift[]
+  vehicles Vehicle[]
+
+  @@index([deletedAt])
+  @@map("employees")
+}
+
+// Shift Planning
+model Shift {
+  id              String      @id @default(uuid())
+  employeeId      String
+  day             DateTime
+  slot            ShiftSlot
+  status          ShiftStatus @default(SCHEDULED)
+  efficiencyScore Float?
+  notes           String?
+  deletedAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([day])
+  @@index([deletedAt])
+  @@unique([employeeId, day, slot])
+  @@map("shifts")
+}
+
+model ShiftConstraint {
+  id        String   @id @default(uuid())
+  key       String
+  value     Json
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([key])
+  @@map("shift_constraints")
+}
+
+// Vehicle Management
+model Vehicle {
+  id                  String      @id @default(uuid())
+  plateNumber         String      @unique
+  type                VehicleType
+  model               String
+  year                Int
+  fuelType            FuelType
+  fuelCapacity        Float
+  assignedOperatorId  String?
+  isActive            Boolean     @default(true)
+  lastMaintenanceDate DateTime?
+  nextMaintenanceDate DateTime?
+  deletedAt           DateTime?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  // Relations
+  assignedOperator Employee?         @relation(fields: [assignedOperatorId], references: [id], onDelete: SetNull)
+  locations        VehicleLocation[]
+  routes           VehicleRoute[]
+  optimizedRoutes  OptimizedRoute[]
+  fuelReports      FuelReport[]
+  telemetryEvents  TelemetryEvent[]
+
+  @@index([assignedOperatorId])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@map("vehicles")
+}
+
+model VehicleLocation {
+  id         String   @id @default(uuid())
+  vehicleId  String
+  latitude   Float
+  longitude  Float
+  speed      Float?
+  heading    Float?
+  altitude   Float?
+  recordedAt DateTime @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, recordedAt])
+  @@index([recordedAt])
+  @@map("vehicle_locations")
+}
+
+model VehicleRoute {
+  id          String    @id @default(uuid())
+  vehicleId   String
+  startedAt   DateTime
+  endedAt     DateTime?
+  distanceKm  Float?
+  fuelUsed    Float?
+  startLat    Float
+  startLng    Float
+  endLat      Float?
+  endLng      Float?
+  routePoints Json? // Array of GPS points
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  vehicle         Vehicle          @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  optimizedRoutes OptimizedRoute[]
+
+  @@index([vehicleId])
+  @@index([startedAt])
+  @@map("vehicle_routes")
+}
+
+model OptimizedRoute {
+  id                     String                @id @default(uuid())
+  vehicleRouteId         String?               // Reference to original route if exists
+  vehicleId              String                // Which vehicle this optimization is for
+
+  // Algorithm metadata
+  algorithm              OptimizationAlgorithm
+  pattern                OptimizationPattern   @default(NONE)
+  algorithmParameters    Json?                 // Algorithm-specific parameters (iterations, population size, etc.)
+
+  // Original metrics (before optimization)
+  originalDistance       Float?                // meters
+  originalTime           Float?                // minutes
+  originalFuelCost       Float?                // liters
+
+  // Optimized metrics
+  optimizedDistance      Float                 // meters
+  optimizedTime          Float                 // minutes
+  optimizedFuelCost      Float                 // liters
+
+  // Savings
+  distanceSavings        Float?                // meters saved
+  distanceSavingsPercent Float?                // percentage saved
+  timeSavings            Float?                // minutes saved
+  timeSavingsPercent     Float?                // percentage saved
+  fuelSavings            Float?                // liters saved
+  fuelSavingsPercent     Float?                // percentage saved
+
+  // Route data
+  optimizedPath          Json                  // Array of GPS coordinates [{lat, lng}, ...]
+  waypoints              Json?                 // Key waypoints/stops
+
+  // Performance metadata
+  optimizationTimeMs     Int?                  // Time taken to optimize (milliseconds)
+  numberOfStops          Int                   // Number of stops in route
+
+  // Status
+  isApplied              Boolean               @default(false) // Whether this optimization was applied to actual route
+  appliedAt              DateTime?
+
+  // Audit
+  createdAt              DateTime              @default(now())
+  updatedAt              DateTime              @updatedAt
+
+  // Relations
+  vehicleRoute           VehicleRoute?         @relation(fields: [vehicleRouteId], references: [id], onDelete: SetNull)
+  vehicle                Vehicle               @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, createdAt])
+  @@index([vehicleRouteId])
+  @@index([algorithm])
+  @@index([isApplied])
+  @@map("optimized_routes")
+}
+
+model FuelReport {
+  id                String   @id @default(uuid())
+  vehicleId         String
+  period            String // e.g., "2024-01", "2024-Q1"
+  consumptionLiters Float
+  predictionLiters  Float?
+  costPerLiter      Float?
+  totalCost         Float?
+  efficiency        Float? // km per liter
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId])
+  @@unique([vehicleId, period])
+  @@map("fuel_reports")
+}
+
+model TelemetryEvent {
+  id        String              @id @default(uuid())
+  vehicleId String
+  type      TelemetryEventType
+  data      Json // Event-specific data
+  severity  TelemetrySeverity?
+  message   String?
+  timestamp DateTime            @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, timestamp])
+  @@index([type, timestamp])
+  @@index([severity, timestamp])
+  @@map("telemetry_events")
+}
+
+// Voice Messaging
+model Message {
+  id           String         @id @default(uuid())
+  senderId     String
+  receiverId   String
+  content      String? // Text content or transcript
+  audioPath    String? // Path to audio file (deprecated, use audioAsset relation)
+  audioAssetId String?
+  duration     Int? // Duration in seconds
+  status       MessageStatus  @default(SENT)
+  priority     MessagePriority @default(NORMAL)
+  transcript   String? // Auto-generated transcript
+  isRead       Boolean        @default(false)
+  readAt       DateTime?
+  deletedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  sender      User        @relation("SentMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver    User        @relation("ReceivedMessages", fields: [receiverId], references: [id], onDelete: SetNull)
+  audioAsset  AudioAsset? @relation(fields: [audioAssetId], references: [id], onDelete: SetNull)
+
+  @@index([senderId])
+  @@index([receiverId, isRead])
+  @@index([createdAt])
+  @@index([priority])
+  @@index([deletedAt])
+  @@map("messages")
+}
+
+// Audio Assets
+model AudioAsset {
+  id          String    @id @default(uuid())
+  filename    String    @unique
+  originalName String
+  mimeType    String
+  fileSize    Int
+  duration    Int? // Duration in seconds
+  s3Key       String? // S3 object key
+  s3Bucket    String?
+  metadata    Json? // Additional metadata
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  messages Message[]
+
+  @@index([filename])
+  @@index([deletedAt])
+  @@map("audio_assets")
+}
+
+// System Audit and Logging
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  resource  String
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  timestamp DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+  @@map("audit_logs")
+}
+
+// Task Assignment
+model Task {
+  id              String       @id @default(uuid())
+  title           String       @db.VarChar(150)
+  description     String?
+  priority        TaskPriority @default(NORMAL)
+  status          TaskStatus   @default(OPEN)
+  dueDate         DateTime?
+  assignerId      String
+  completionNote  String?      @db.Text
+  completedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  assigner        User            @relation("TaskAssigner", fields: [assignerId], references: [id], onDelete: Restrict)
+  assignees       TaskAssignee[]
+
+  @@index([assignerId, status])
+  @@index([dueDate])
+  @@index([status])
+  @@map("tasks")
+}
+
+// Many-to-many relationship between Tasks and Users (assignees)
+model TaskAssignee {
+  id        String   @id @default(uuid())
+  taskId    String
+  userId    String
+  createdAt DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@index([userId, taskId])
+  @@index([taskId])
+  @@map("task_assignees")
+}
+
+// System Configuration
+model SystemConfig {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_config")
+}
+
+// Warehouse Management
+model WarehouseItem {
+  id          String                 @id @default(uuid())
+  name        String
+  description String?
+  category    WarehouseItemCategory
+  sku         String?                @unique
+  quantity    Int                    @default(0)
+  location    String
+  condition   WarehouseItemCondition @default(GOOD)
+  isActive    Boolean                @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  // Relations
+  transactions WarehouseTransaction[]
+
+  @@index([category])
+  @@index([location])
+  @@index([isActive])
+  @@index([deletedAt])
+  @@index([sku])
+  @@map("warehouse_items")
+}
+
+model WarehouseTransaction {
+  id                String                  @id @default(uuid())
+  itemId            String
+  type              WarehouseTransactionType
+  userId            String // Who performed the action
+  assignedUserId    String? // Who the item is assigned to (for check-out)
+  quantity          Int
+  previousQuantity  Int
+  newQuantity       Int
+  notes             String?
+  transferToLocation String? // For transfer transactions
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+
+  // Relations
+  item          WarehouseItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  user          User          @relation("TransactionUser", fields: [userId], references: [id], onDelete: Restrict)
+  assignedUser  User?         @relation("AssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
+
+  @@index([itemId])
+  @@index([userId])
+  @@index([assignedUserId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("warehouse_transactions")
+}

@@ -1,0 +1,14 @@
+# MQTT Access Control List
+# Define topic permissions for different users
+
+# Backend service can read/write all topics
+user backend-service
+topic readwrite #
+
+# Vehicles can only publish their own telemetry and subscribe to their commands
+pattern read vehicles/%u/commands/+
+pattern write vehicles/%u/telemetry/+
+pattern write vehicles/%u/status
+
+# Deny access to all other topics by default
+topic deny #

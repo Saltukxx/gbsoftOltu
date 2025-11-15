@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(npm init:*)",
+      "Bash(rm:*)",
+      "Bash(ls:*)",
+      "Bash(touch:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker compose:*)",
+      "Bash(chmod:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(npm install)",
+      "Bash(find:*)",
+      "Bash(cp:*)",
+      "Bash(npx prisma migrate dev:*)",
+      "Bash(npx prisma generate:*)",
+      "Bash(npx tsc --noEmit)"
+    ],
+    "deny": []
+  }
+}

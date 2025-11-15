@@ -1,0 +1,26 @@
+{
+  "name": "oltu-belediyesi-platform",
+  "version": "1.0.0",
+  "description": "Oltu Belediyesi Akıllı Yönetim Platformu - Smart management platform for Oltu Municipality",
+  "private": true,
+  "packageManager": "pnpm@8.15.1",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "test": "turbo test",
+    "db:migrate": "turbo db:migrate",
+    "db:generate": "turbo db:generate",
+    "docker:dev": "docker-compose -f infra/docker-compose.dev.yml up",
+    "docker:build": "docker-compose -f infra/docker-compose.dev.yml build",
+    "docker:down": "docker-compose -f infra/docker-compose.dev.yml down"
+  },
+  "keywords": ["municipality", "smart-management", "shift-planning", "vehicle-tracking", "voice-messaging"],
+  "author": "GBSoft",
+  "license": "MIT",
+  "devDependencies": {
+    "turbo": "^1.13.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0"
+  }
+}
