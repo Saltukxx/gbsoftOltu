@@ -195,12 +195,37 @@ model Shift {
   updatedAt       DateTime    @updatedAt
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  history  ShiftHistory[]
 
   @@index([employeeId])
   @@index([day])
   @@index([deletedAt])
   @@unique([employeeId, day, slot])
   @@map("shifts")
+}
+
+model ShiftHistory {
+  id              String      @id @default(uuid())
+  shiftId         String
+  employeeId      String
+  day             DateTime
+  slot            ShiftSlot
+  status          ShiftStatus
+  efficiencyScore Float?
+  notes           String?
+  action          String      // 'CREATE', 'UPDATE', 'DELETE'
+  changedBy       String?      // User ID who made the change
+  previousData    Json?        // Snapshot of previous state (for updates)
+  createdAt       DateTime    @default(now())
+
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+  @@index([employeeId])
+  @@index([day])
+  @@index([createdAt])
+  @@index([action])
+  @@map("shift_history")
 }
 
 model ShiftConstraint {
