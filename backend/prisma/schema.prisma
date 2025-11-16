@@ -32,6 +32,23 @@ enum ShiftStatus {
   CANCELLED
 }
 
+enum LeaveType {
+  VACATION
+  SICK_LEAVE
+  PERSONAL
+  UNPAID
+  MATERNITY_PATERNITY
+  BEREAVEMENT
+  OTHER
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
 enum VehicleType {
   TRUCK
   CAR
@@ -176,9 +193,36 @@ model Employee {
   user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   shifts Shift[]
   vehicles Vehicle[]
+  leaves EmployeeLeave[]
 
   @@index([deletedAt])
   @@map("employees")
+}
+
+// Employee Leave/Vacation Management
+model EmployeeLeave {
+  id              String      @id @default(uuid())
+  employeeId      String
+  type            LeaveType
+  status          LeaveStatus @default(PENDING)
+  startDate       DateTime
+  endDate         DateTime
+  reason          String?
+  approvedBy      String?     // User ID who approved/rejected
+  approvedAt      DateTime?
+  rejectionReason String?
+  notes           String?
+  deletedAt       DateTime?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@index([startDate, endDate])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("employee_leaves")
 }
 
 // Shift Planning
@@ -195,12 +239,37 @@ model Shift {
   updatedAt       DateTime    @updatedAt
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  history  ShiftHistory[]
 
   @@index([employeeId])
   @@index([day])
   @@index([deletedAt])
   @@unique([employeeId, day, slot])
   @@map("shifts")
+}
+
+model ShiftHistory {
+  id              String      @id @default(uuid())
+  shiftId         String
+  employeeId      String
+  day             DateTime
+  slot            ShiftSlot
+  status          ShiftStatus
+  efficiencyScore Float?
+  notes           String?
+  action          String      // 'CREATE', 'UPDATE', 'DELETE'
+  changedBy       String?      // User ID who made the change
+  previousData    Json?        // Snapshot of previous state (for updates)
+  createdAt       DateTime    @default(now())
+
+  shift Shift @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+
+  @@index([shiftId])
+  @@index([employeeId])
+  @@index([day])
+  @@index([createdAt])
+  @@index([action])
+  @@map("shift_history")
 }
 
 model ShiftConstraint {
