@@ -17,7 +17,8 @@ class TimefoldHybridSolver:
 
     def __init__(self):
         self.shift_hours = 8
-        self.max_solve_time = 30  # seconds
+        self.base_timeout = 60  # Base timeout increased from 30 to 60 seconds
+        self.max_timeout = 180  # Maximum timeout for very large problems
         self.confidence_floor = 0.55
 
     def solve(
@@ -26,9 +27,13 @@ class TimefoldHybridSolver:
         time_slots: List[Dict[str, str]],
         constraints: ShiftConstraint,
     ) -> Tuple[List[ShiftAssignment], Dict[str, int]]:
+        # Adaptive timeout based on problem complexity
+        timeout = self._calculate_adaptive_timeout(len(employees), len(time_slots), constraints)
+        logger.info(f"Using adaptive timeout: {timeout}s for {len(employees)} employees, {len(time_slots)} slots")
+        
         model = cp_model.CpModel()
         solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = self.max_solve_time
+        solver.parameters.max_time_in_seconds = timeout
         solver.parameters.num_search_workers = 8
 
         assignments = {}
@@ -62,21 +67,60 @@ class TimefoldHybridSolver:
                 max_hours = min(employee.max_hours_per_week, constraints.max_hours_per_week)
                 model.Add(sum(employee_vars) * self.shift_hours <= max_hours)
 
-        # At most one shift per day per employee (min rest hours)
+        # Minimum rest hours constraint between consecutive shifts
+        # Define shift end times (in hours from midnight)
+        shift_times = {
+            ShiftSlot.MORNING: {"start": 8, "end": 16},      # 08:00-16:00
+            ShiftSlot.AFTERNOON: {"start": 16, "end": 24},   # 16:00-00:00 (midnight)
+            ShiftSlot.NIGHT: {"start": 0, "end": 8},         # 00:00-08:00
+        }
+
         days = sorted({slot["date"] for slot in time_slots})
         day_to_slots = defaultdict(list)
         for idx, slot in enumerate(time_slots):
             day_to_slots[slot["date"]].append(idx)
 
+        # For each employee, enforce minimum rest between consecutive day shifts
+        min_rest_hours = constraints.min_rest_hours if hasattr(constraints, 'min_rest_hours') else 12
+
         for emp_idx in range(len(employees)):
-            for day, indices in day_to_slots.items():
-                vars_for_day = [
-                    assignments[(emp_idx, slot_idx)]
-                    for slot_idx in indices
-                    if (emp_idx, slot_idx) in assignments
-                ]
-                if vars_for_day:
-                    model.Add(sum(vars_for_day) <= 1)
+            for day_idx in range(len(days) - 1):
+                current_day = days[day_idx]
+                next_day = days[day_idx + 1]
+
+                current_day_slots = day_to_slots[current_day]
+                next_day_slots = day_to_slots[next_day]
+
+                # Check all combinations of current day shift -> next day shift
+                for curr_slot_idx in current_day_slots:
+                    if (emp_idx, curr_slot_idx) not in assignments:
+                        continue
+
+                    curr_slot = time_slots[curr_slot_idx]
+                    curr_shift_end = shift_times[curr_slot["slot"]]["end"]
+
+                    for next_slot_idx in next_day_slots:
+                        if (emp_idx, next_slot_idx) not in assignments:
+                            continue
+
+                        next_slot = time_slots[next_slot_idx]
+                        next_shift_start = shift_times[next_slot["slot"]]["start"]
+
+                        # Calculate rest hours between shifts
+                        # If current shift ends at 24 (midnight) and next starts at 8, rest = 8 hours
+                        # If current shift ends at 16 and next starts at 8 next day, rest = 16 hours
+                        if curr_shift_end == 24:
+                            rest_hours = next_shift_start  # Midnight to next start
+                        else:
+                            rest_hours = (24 - curr_shift_end) + next_shift_start
+
+                        # If rest is insufficient, prevent both shifts from being assigned
+                        if rest_hours < min_rest_hours:
+                            # Create constraint: both cannot be assigned simultaneously
+                            model.Add(
+                                assignments[(emp_idx, curr_slot_idx)] +
+                                assignments[(emp_idx, next_slot_idx)] <= 1
+                            )
 
         # Max consecutive days constraint via sliding window
         max_consecutive = constraints.max_consecutive_days or 7
@@ -165,6 +209,43 @@ class TimefoldHybridSolver:
                 return False
         return True
 
+    def _calculate_adaptive_timeout(
+        self,
+        num_employees: int,
+        num_slots: int,
+        constraints: ShiftConstraint,
+    ) -> int:
+        """
+        Calculate adaptive timeout based on problem size and complexity.
+        
+        Formula:
+        - Base timeout: 60 seconds
+        - Employee factor: +2s per employee above 20
+        - Slot factor: +0.5s per slot above 30
+        - Constraint complexity: +10s if skills required, +5s if rest hours < 12
+        - Cap at max_timeout (180s)
+        """
+        timeout = self.base_timeout
+        
+        # Employee complexity factor
+        if num_employees > 20:
+            timeout += (num_employees - 20) * 2
+        
+        # Slot complexity factor
+        if num_slots > 30:
+            timeout += (num_slots - 30) * 0.5
+        
+        # Constraint complexity factors
+        if constraints.required_skills:
+            timeout += 10  # Skill matching adds complexity
+        
+        min_rest = getattr(constraints, 'min_rest_hours', 12)
+        if min_rest < 12:
+            timeout += 5  # Tighter rest constraints add complexity
+        
+        # Cap at maximum
+        return min(int(timeout), self.max_timeout)
+    
     def _slot_requires_skill(
         self,
         slot: Dict[str, str],
