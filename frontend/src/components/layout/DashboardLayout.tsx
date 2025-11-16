@@ -1,11 +1,11 @@
 import { ReactNode, useState, useMemo } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuthStore, useHasRole } from '@/stores/authStore'
-import { 
-  Building, 
-  LayoutDashboard, 
-  Calendar, 
-  Truck, 
+import {
+  Building,
+  LayoutDashboard,
+  Calendar,
+  Truck,
   MessageCircle,
   CheckSquare,
   LogOut,
@@ -16,7 +16,8 @@ import {
   User,
   Users,
   BarChart3,
-  Package
+  Package,
+  Route
 } from 'lucide-react'
 
 interface DashboardLayoutProps {
@@ -68,6 +69,12 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       name: 'Analiz',
       href: '/analysis',
       icon: BarChart3,
+      requiredRole: 'SUPERVISOR',
+    },
+    {
+      name: 'Rota Optimizasyonu',
+      href: '/route-optimization',
+      icon: Route,
       requiredRole: 'SUPERVISOR',
     },
     {

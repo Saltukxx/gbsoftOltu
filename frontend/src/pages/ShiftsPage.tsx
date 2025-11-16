@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd'
+import { DndContext, DragEndEvent, DragStartEvent, useDraggable, useDroppable, DragOverlay, closestCenter } from '@dnd-kit/core'
+import { CSS } from '@dnd-kit/utilities'
 import { apiClient } from '@/services/api'
 import { websocketService } from '@/services/websocketService'
 import { useAuthStore, useHasRole } from '@/stores/authStore'
@@ -193,32 +194,32 @@ function ShiftsPageContent() {
   }, [queryClient, isOnline])
 
   // Drag and drop handling
-  const onDragStart = (start: any) => {
-    const shift = shiftsData?.shifts.find(s => s.id === start.draggableId)
+  const handleDragStart = (event: DragStartEvent) => {
+    const shift = shiftsData?.shifts.find(s => s.id === event.active.id)
     setDraggedShift(shift || null)
   }
 
-  const onDragEnd = (result: DropResult) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     setDraggedShift(null)
-    
-    if (!result.destination || !canManageShifts || !isOnline) {
+
+    const { active, over } = event
+
+    if (!over || !canManageShifts || !isOnline) {
       if (!isOnline) {
         toast.warning('Offline modda değişiklik yapılamaz', 'Bağlantınızı kontrol edin')
       }
       return
     }
 
-    const { source, destination, draggableId } = result
-    
     // Don't update if dropped in the same position
-    if (source.droppableId === destination.droppableId && source.index === destination.index) {
+    if (active.id === over.id) {
       return
     }
 
     // Parse destination slot info - format: ${dayKey}__${slot.code}
-    const [destDay, destSlot] = destination.droppableId.split('__')
-    const shift = shiftsData?.shifts.find(s => s.id === draggableId)
-    
+    const [destDay, destSlot] = over.id.toString().split('__')
+    const shift = shiftsData?.shifts.find(s => s.id === active.id)
+
     if (!shift || !destDay || !destSlot) {
       toast.error('Geçersiz hedef konum', 'Lütfen tekrar deneyin')
       return
@@ -290,6 +291,79 @@ function ShiftsPageContent() {
       case 'SCHEDULED': return <Clock className="w-3 h-3" />
       default: return <XCircle className="w-3 h-3" />
     }
+  }
+
+  // Droppable component
+  const DroppableSlot = ({
+    id,
+    children
+  }: {
+    id: string
+    children: React.ReactNode
+  }) => {
+    const { setNodeRef, isOver } = useDroppable({
+      id,
+    })
+
+    return (
+      <div
+        ref={setNodeRef}
+        className={`
+          min-h-[100px] p-2 rounded-lg border-2 border-dashed transition-colors
+          ${isOver
+            ? 'border-blue-300 bg-blue-50'
+            : 'border-gray-200 bg-gray-50'
+          }
+        `}
+      >
+        {children}
+      </div>
+    )
+  }
+
+  // Draggable component
+  const DraggableShift = ({
+    shift,
+    disabled
+  }: {
+    shift: Shift
+    disabled: boolean
+  }) => {
+    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+      id: shift.id,
+      disabled,
+    })
+
+    const style = {
+      transform: CSS.Translate.toString(transform),
+    }
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        {...listeners}
+        {...attributes}
+        className={`
+          p-2 rounded border text-xs transition-transform
+          ${getStatusColor(shift.status)}
+          ${isDragging ? 'opacity-50 shadow-lg' : 'hover:shadow-md'}
+          ${!disabled ? 'cursor-move' : 'cursor-default'}
+        `}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-1">
+            {getStatusIcon(shift.status)}
+            <span className="font-medium">
+              {shift.employee.user.firstName} {shift.employee.user.lastName}
+            </span>
+          </div>
+        </div>
+        <div className="text-xs opacity-75 mt-1">
+          {shift.employee.department}
+        </div>
+      </div>
+    )
   }
 
   if (isLoading) {
@@ -442,7 +516,11 @@ function ShiftsPageContent() {
           )}
         </div>
 
-        <DragDropContext onDragStart={onDragStart} onDragEnd={onDragEnd}>
+        <DndContext
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
           <div className="overflow-x-auto">
             <div className="grid grid-cols-8 gap-2 min-w-[800px]">
               {/* Header row */}
@@ -466,7 +544,7 @@ function ShiftsPageContent() {
                     <span className="text-sm font-medium text-gray-900">{slot.label}</span>
                     <span className="text-xs text-gray-500 ml-2">({slot.timeRange})</span>
                   </div>
-                  
+
                   {weekDays.map((day, dayIndex) => {
                     const dayDate = new Date(selectedWeek)
                     dayDate.setDate(dayDate.getDate() + dayIndex)
@@ -476,66 +554,47 @@ function ShiftsPageContent() {
                     const shiftsInSlot = getShiftsByDayAndSlot(dayKey, slot.code)
 
                     return (
-                      <Droppable key={dropId} droppableId={dropId}>
-                        {(provided, snapshot) => (
-                          <div
-                            ref={provided.innerRef}
-                            {...provided.droppableProps}
-                            className={`
-                              min-h-[100px] p-2 rounded-lg border-2 border-dashed transition-colors
-                              ${snapshot.isDraggingOver 
-                                ? 'border-blue-300 bg-blue-50' 
-                                : 'border-gray-200 bg-gray-50'
-                              }
-                            `}
-                          >
-                            <div className="space-y-2">
-                              {shiftsInSlot.map((shift, index) => (
-                                <Draggable
-                                  key={shift.id}
-                                  draggableId={shift.id}
-                                  index={index}
-                                  isDragDisabled={!canManageShifts}
-                                >
-                                  {(provided, snapshot) => (
-                                    <div
-                                      ref={provided.innerRef}
-                                      {...provided.draggableProps}
-                                      {...provided.dragHandleProps}
-                                      className={`
-                                        p-2 rounded border text-xs transition-transform
-                                        ${getStatusColor(shift.status)}
-                                        ${snapshot.isDragging ? 'rotate-2 shadow-lg' : 'hover:shadow-md'}
-                                        ${canManageShifts ? 'cursor-move' : 'cursor-default'}
-                                      `}
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <div className="flex items-center space-x-1">
-                                          {getStatusIcon(shift.status)}
-                                          <span className="font-medium">
-                                            {shift.employee.user.firstName} {shift.employee.user.lastName}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      <div className="text-xs opacity-75 mt-1">
-                                        {shift.employee.department}
-                                      </div>
-                                    </div>
-                                  )}
-                                </Draggable>
-                              ))}
-                            </div>
-                            {provided.placeholder}
-                          </div>
-                        )}
-                      </Droppable>
+                      <DroppableSlot key={dropId} id={dropId}>
+                        <div className="space-y-2">
+                          {shiftsInSlot.map((shift) => (
+                            <DraggableShift
+                              key={shift.id}
+                              shift={shift}
+                              disabled={!canManageShifts}
+                            />
+                          ))}
+                        </div>
+                      </DroppableSlot>
                     )
                   })}
                 </div>
               ))}
             </div>
           </div>
-        </DragDropContext>
+
+          <DragOverlay>
+            {draggedShift ? (
+              <div
+                className={`
+                  p-2 rounded border text-xs shadow-lg
+                  ${getStatusColor(draggedShift.status)}
+                `}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-1">
+                    {getStatusIcon(draggedShift.status)}
+                    <span className="font-medium">
+                      {draggedShift.employee.user.firstName} {draggedShift.employee.user.lastName}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-xs opacity-75 mt-1">
+                  {draggedShift.employee.department}
+                </div>
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
 
       {/* Generation Results Modal */}

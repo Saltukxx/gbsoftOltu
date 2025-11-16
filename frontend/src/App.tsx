@@ -14,6 +14,7 @@ import TasksPage from '@/pages/TasksPage'
 import UserManagementPage from '@/pages/UserManagementPage'
 import AnalysisPage from '@/pages/AnalysisPage'
 import WarehousePage from '@/pages/WarehousePage'
+import RouteOptimizationPage from '@/pages/RouteOptimizationPage'
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary'
 import { ToastProvider } from '@/components/ui/Toast'
 import { LoadingProvider, PageLoading } from '@/components/ui/LoadingStates'
@@ -61,6 +62,7 @@ function AppContent() {
                 <Route path="/messages" element={<MessagesPage />} />
                 <Route path="/tasks" element={<TasksPage />} />
                 <Route path="/analysis" element={<AnalysisPage />} />
+                <Route path="/route-optimization" element={<RouteOptimizationPage />} />
                 <Route path="/warehouse" element={<WarehousePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/users" element={<UserManagementPage />} />

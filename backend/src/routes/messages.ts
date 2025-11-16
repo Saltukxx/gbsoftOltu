@@ -31,11 +31,24 @@ const upload = multer({
   },
 });
 
-// Get conversations for current user
-router.get('/conversations', asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const userId = req.user!.id;
+// Get conversations for current user with pagination
+router.get('/conversations', [
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('offset').optional().isInt({ min: 0 }).withMessage('Offset must be non-negative'),
+], asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      errors: errors.array(),
+    });
+  }
 
-  // Get all messages where user is either sender or receiver
+  const userId = req.user!.id;
+  const limit = parseInt(req.query.limit as string) || 50;
+  const offset = parseInt(req.query.offset as string) || 0;
+
+  // Get all messages where user is either sender or receiver (limited for performance)
   const messages = await prisma.message.findMany({
     where: {
       OR: [
@@ -62,6 +75,7 @@ router.get('/conversations', asyncHandler(async (req: AuthenticatedRequest, res)
       },
     },
     orderBy: { createdAt: 'desc' },
+    take: 500, // Limit to recent 500 messages for performance
   });
 
   // Group messages into conversations
@@ -119,13 +133,23 @@ router.get('/conversations', asyncHandler(async (req: AuthenticatedRequest, res)
     }
   });
 
-  const conversations = Array.from(conversationsMap.values()).sort((a, b) => 
+  const allConversations = Array.from(conversationsMap.values()).sort((a, b) =>
     new Date(b.lastMessage.timestamp).getTime() - new Date(a.lastMessage.timestamp).getTime()
   );
+
+  // Apply pagination
+  const total = allConversations.length;
+  const conversations = allConversations.slice(offset, offset + limit);
 
   res.json({
     success: true,
     data: conversations,
+    pagination: {
+      total,
+      limit,
+      offset,
+      hasMore: offset + limit < total,
+    },
   });
 }));
 

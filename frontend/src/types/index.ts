@@ -1,5 +1,5 @@
 // User types
-export type UserRole = 'PRESIDENT' | 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'MESSENGER'
+export type UserRole = 'PRESIDENT' | 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'MESSENGER' | 'DEPO_KULLANICISI'
 
 export interface User {
   id: string
@@ -48,10 +48,23 @@ export interface Shift {
   status: ShiftStatus
   efficiencyScore?: number
   notes?: string
+  createdAt?: string
+  updatedAt?: string
   employee: {
+    id: string
+    userId: string
+    employeeNumber: string
+    department: string
+    position: string
+    skills: string[]
+    performanceScore: number
+    maxHoursPerWeek: number
+    availability: Record<string, string[]>
     user: {
+      id: string
       firstName: string
       lastName: string
+      email: string
     }
   }
 }

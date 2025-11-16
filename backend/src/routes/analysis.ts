@@ -5,6 +5,7 @@ import { asyncHandler } from '@/middleware/errorHandler';
 import { requireSupervisorOrAbove, AuthenticatedRequest } from '@/middleware/auth';
 import { aiClient } from '@/services/aiClient';
 import { logger } from '@/services/logger';
+import { cache } from '@/services/cache';
 import prisma from '@/db';
 
 const router = express.Router();
@@ -40,22 +41,34 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
   return { startDate, endDate };
 }
 
-// Get comprehensive analysis overview
+// Get comprehensive analysis overview (with Redis caching)
 router.get('/overview', requireSupervisorOrAbove, [
   query('period').optional().isIn(['today', 'week', 'month', 'quarter']),
 ], asyncHandler(async (req: AuthenticatedRequest, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ 
+    return res.status(400).json({
       success: false,
-      errors: errors.array() 
+      errors: errors.array()
     });
   }
 
   const period = (req.query.period as string) || 'month';
   const { startDate, endDate } = getDateRange(period);
 
+  // Cache key based on period
+  const cacheKey = `analysis:overview:${period}`;
+
   try {
+    // Try to get from cache first
+    const cached = await cache.get<any>(cacheKey);
+    if (cached) {
+      logger.debug(`Analysis overview served from cache for period: ${period}`);
+      return res.json(cached);
+    }
+
+    // If not in cache, compute the analysis
+    logger.debug(`Computing analysis overview for period: ${period}`);
     // 1. Municipality Overview
     const totalVehicles = await prisma.vehicle.count({
       where: { isActive: true }
@@ -315,7 +328,8 @@ router.get('/overview', requireSupervisorOrAbove, [
       return acc;
     }, {} as Record<string, { vehicleCount: number; totalCO2: number; averageCO2PerVehicle: number }>);
 
-    res.json({
+    // Build response object
+    const response = {
       success: true,
       period,
       timeRange: {
@@ -357,11 +371,18 @@ router.get('/overview', requireSupervisorOrAbove, [
         },
         byFuelType: emissionsData.emissions_by_fuel_type || {},
         byVehicleType: emissionsByVehicleType,
-        averagePerVehicle: totalVehicles > 0 
+        averagePerVehicle: totalVehicles > 0
           ? ((emissionsData.total_emissions?.CO2 || 0) / totalVehicles)
           : 0
       }
-    });
+    };
+
+    // Cache the result with appropriate TTL based on period
+    const cacheTTL = period === 'today' ? 60 : period === 'week' ? 300 : period === 'month' ? 600 : 1800; // 1min, 5min, 10min, 30min
+    await cache.set(cacheKey, response, { ttl: cacheTTL });
+    logger.debug(`Cached analysis overview for period: ${period} with TTL: ${cacheTTL}s`);
+
+    res.json(response);
   } catch (error: any) {
     logger.error('Analysis overview error:', { 
       error: error?.message || String(error), 

@@ -1,9 +1,10 @@
 import express from 'express';
 import { body, query, param, validationResult } from 'express-validator';
-import { TelemetryEventType } from '@prisma/client';
+import { TelemetryEventType, VehicleType, FuelType } from '@prisma/client';
 import { asyncHandler, createAppError } from '@/middleware/errorHandler';
-import { requireOperatorOrAbove, AuthenticatedRequest } from '@/middleware/auth';
+import { requireOperatorOrAbove, requirePresident, AuthenticatedRequest } from '@/middleware/auth';
 import { apiKeyAuth, requireScope } from '@/middleware/apiKeyAuth';
+import { sanitizeInput } from '@/middleware/sanitization';
 import { securityAudit, SecurityEventType, SecurityEventSeverity } from '@/services/securityAudit';
 import { logger } from '@/services/logger';
 import { aiClient } from '@/services/aiClient';
@@ -12,45 +13,66 @@ import prisma from '@/db';
 
 const router = express.Router();
 
-// Get all vehicles with latest telemetry
-router.get('/', asyncHandler(async (req: AuthenticatedRequest, res) => {
-  const vehicles = await prisma.vehicle.findMany({
-    where: { isActive: true },
-    include: {
-      assignedOperator: {
-        include: {
-          user: {
-            select: { firstName: true, lastName: true },
+// Get all vehicles with latest telemetry and pagination
+router.get('/', [
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('offset').optional().isInt({ min: 0 }).withMessage('Offset must be non-negative'),
+], asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      errors: errors.array(),
+    });
+  }
+
+  const limit = parseInt(req.query.limit as string) || 50;
+  const offset = parseInt(req.query.offset as string) || 0;
+
+  const where = { isActive: true };
+
+  const [vehicles, total] = await Promise.all([
+    prisma.vehicle.findMany({
+      where,
+      include: {
+        assignedOperator: {
+          include: {
+            user: {
+              select: { firstName: true, lastName: true },
+            },
+          },
+        },
+        locations: {
+          orderBy: { recordedAt: 'desc' },
+          take: 1,
+        },
+        telemetryEvents: {
+          orderBy: { timestamp: 'desc' },
+          take: 1,
+          where: {
+            type: 'FUEL_LEVEL',
+          },
+        },
+        _count: {
+          select: {
+            routes: true,
+            fuelReports: true,
           },
         },
       },
-      locations: {
-        orderBy: { recordedAt: 'desc' },
-        take: 1,
-      },
-      telemetryEvents: {
-        orderBy: { timestamp: 'desc' },
-        take: 1,
-        where: {
-          type: 'FUEL_LEVEL',
-        },
-      },
-      _count: {
-        select: {
-          routes: true,
-          fuelReports: true,
-        },
-      },
-    },
-    orderBy: { plateNumber: 'asc' },
-  });
+      orderBy: { plateNumber: 'asc' },
+      take: limit,
+      skip: offset,
+    }),
+    prisma.vehicle.count({ where }),
+  ]);
 
   res.json({
     success: true,
     data: vehicles.map(vehicle => {
       const lastLocation = vehicle.locations[0] || null;
       const lastTelemetryEvent = vehicle.telemetryEvents[0] || null;
-      
+
       // Extract fuel level from telemetry event data if available
       const lastTelemetry = lastTelemetryEvent ? {
         vehicleId: vehicle.id,
@@ -75,6 +97,12 @@ router.get('/', asyncHandler(async (req: AuthenticatedRequest, res) => {
         currentLocation: lastLocation,
       };
     }),
+    pagination: {
+      total,
+      limit,
+      offset,
+      hasMore: offset + limit < total,
+    },
   });
 }));
 
@@ -646,6 +674,191 @@ router.post('/:id/fuel-prediction', [
     }
     throw error;
   }
+}));
+
+// Create new vehicle (PRESIDENT only)
+router.post('/', requirePresident, sanitizeInput, [
+  body('plateNumber').trim().notEmpty().withMessage('Plate number is required'),
+  body('type').isIn(Object.values(VehicleType)).withMessage('Valid vehicle type is required'),
+  body('model').trim().notEmpty().withMessage('Model is required'),
+  body('year').isInt({ min: 1900, max: new Date().getFullYear() + 1 }).withMessage('Valid year is required'),
+  body('fuelType').isIn(Object.values(FuelType)).withMessage('Valid fuel type is required'),
+  body('fuelCapacity').isFloat({ min: 0 }).withMessage('Fuel capacity must be a positive number'),
+  body('assignedOperatorId').optional().isUUID().withMessage('Invalid operator ID'),
+], asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      errors: errors.array(),
+    });
+  }
+
+  const {
+    plateNumber,
+    type,
+    model,
+    year,
+    fuelType,
+    fuelCapacity,
+    assignedOperatorId,
+  } = req.body;
+
+  // Check if plate number already exists
+  const existingVehicle = await prisma.vehicle.findUnique({
+    where: { plateNumber: plateNumber.toUpperCase() },
+  });
+
+  if (existingVehicle) {
+    throw createAppError('Plate number already exists', 400);
+  }
+
+  // If operator is assigned, verify they exist and are active
+  if (assignedOperatorId) {
+    const operator = await prisma.employee.findUnique({
+      where: { id: assignedOperatorId },
+      select: { id: true, isActive: true },
+    });
+
+    if (!operator) {
+      throw createAppError('Operator not found', 404);
+    }
+
+    if (!operator.isActive) {
+      throw createAppError('Cannot assign inactive operator', 400);
+    }
+  }
+
+  const vehicle = await prisma.vehicle.create({
+    data: {
+      plateNumber: plateNumber.toUpperCase(),
+      type: type as VehicleType,
+      model,
+      year,
+      fuelType: fuelType as FuelType,
+      fuelCapacity,
+      assignedOperatorId: assignedOperatorId || null,
+      isActive: true,
+    },
+    include: {
+      assignedOperator: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  logger.info('New vehicle created', {
+    vehicleId: vehicle.id,
+    plateNumber: vehicle.plateNumber,
+    createdBy: req.user!.id,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Vehicle created successfully',
+    data: vehicle,
+  });
+}));
+
+// Update vehicle (PRESIDENT only)
+router.patch('/:id', requirePresident, sanitizeInput, [
+  param('id').isUUID().withMessage('Invalid vehicle ID'),
+  body('model').optional().trim().notEmpty().withMessage('Model cannot be empty'),
+  body('year').optional().isInt({ min: 1900, max: new Date().getFullYear() + 1 }).withMessage('Valid year is required'),
+  body('fuelCapacity').optional().isFloat({ min: 0 }).withMessage('Fuel capacity must be a positive number'),
+  body('assignedOperatorId').optional().custom((value) => {
+    if (value === null) return true; // Allow null to unassign
+    if (typeof value === 'string' && value.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+      return true;
+    }
+    throw new Error('Invalid operator ID');
+  }),
+  body('isActive').optional().isBoolean().withMessage('isActive must be boolean'),
+  body('lastMaintenanceDate').optional().isISO8601().withMessage('Invalid date format'),
+  body('nextMaintenanceDate').optional().isISO8601().withMessage('Invalid date format'),
+], asyncHandler(async (req: AuthenticatedRequest, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      errors: errors.array(),
+    });
+  }
+
+  const { id } = req.params;
+  const updateData: any = {};
+
+  // Build update object with only provided fields
+  const allowedFields = ['model', 'year', 'fuelCapacity', 'assignedOperatorId', 'isActive', 'lastMaintenanceDate', 'nextMaintenanceDate'];
+  allowedFields.forEach(field => {
+    if (req.body[field] !== undefined) {
+      if (field === 'lastMaintenanceDate' || field === 'nextMaintenanceDate') {
+        updateData[field] = req.body[field] ? new Date(req.body[field]) : null;
+      } else {
+        updateData[field] = req.body[field];
+      }
+    }
+  });
+
+  if (Object.keys(updateData).length === 0) {
+    throw createAppError('No valid fields to update', 400);
+  }
+
+  // If operator is being assigned, verify they exist and are active
+  if (updateData.assignedOperatorId !== undefined && updateData.assignedOperatorId !== null) {
+    const operator = await prisma.employee.findUnique({
+      where: { id: updateData.assignedOperatorId },
+      select: { id: true, isActive: true },
+    });
+
+    if (!operator) {
+      throw createAppError('Operator not found', 404);
+    }
+
+    if (!operator.isActive) {
+      throw createAppError('Cannot assign inactive operator', 400);
+    }
+  }
+
+  const vehicle = await prisma.vehicle.update({
+    where: { id },
+    data: updateData,
+    include: {
+      assignedOperator: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  logger.info('Vehicle updated', {
+    vehicleId: id,
+    updatedBy: req.user!.id,
+    fields: Object.keys(updateData),
+  });
+
+  res.json({
+    success: true,
+    message: 'Vehicle updated successfully',
+    data: vehicle,
+  });
 }));
 
 export default router;
